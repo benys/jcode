@@ -84,9 +84,11 @@ impl Agent {
         let turn_started_at = Instant::now();
         let start_message_index = self.message_count();
         self.fire_turn_start_hook("chat");
+        crate::herdr::on_turn_start(&self.session.id);
         let result = self.run_turn_streaming_mpsc(event_tx).await;
         self.current_turn_system_reminder = None;
         self.fire_turn_end_hook(&result, turn_started_at, start_message_index);
+        crate::herdr::on_turn_end(&self.session.id, result.is_ok());
         result
     }
 

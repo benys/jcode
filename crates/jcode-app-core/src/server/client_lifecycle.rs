@@ -1367,6 +1367,11 @@ pub(super) async fn handle_client(
                     continue;
                 }
                 current_client_instance_id = client_instance_id.clone();
+                // Snapshot the session id this connection carried into the
+                // Subscribe call, before any resume can mutate
+                // `client_session_id`. Used below to drop the stale Herdr
+                // registry entry if resume ends up binding a different id.
+                let pre_registration_session_id = client_session_id.clone();
                 {
                     let mut connections = client_connections.write().await;
                     if let Some(info) = connections.get_mut(&client_connection_id) {
@@ -1377,6 +1382,12 @@ pub(super) async fn handle_client(
                         // something, so reconnects without env don't clobber it.
                         if !terminal_env.is_empty() {
                             info.terminal_env = terminal_env.clone();
+                            // Register the Herdr pane identity for this
+                            // client's session, so lifecycle reports
+                            // (idle/working/blocked/done) route to the
+                            // correct Herdr pane instead of collapsing every
+                            // shared-server session onto the server's own pane.
+                            crate::herdr::register_session(&info.session_id, &terminal_env);
                         }
                     }
                 }
@@ -1520,6 +1531,25 @@ pub(super) async fn handle_client(
                     }
                 }
                 client_subscribed = true;
+
+                // Re-register the Herdr identity for the FINAL client_session_id.
+                // If the client resumed a different session, client_session_id has
+                // now changed (handle_resume_session mutates it), so the earlier
+                // register_session call (which used the pre-resume id) would
+                // point at the wrong session. Re-register with the final id so
+                // lifecycle reports route to the correct pane. No-op when the
+                // terminal_env did not contain HERDR_* vars.
+                if !terminal_env.is_empty() {
+                    crate::herdr::register_session(&client_session_id, &terminal_env);
+                    // Drop the pre-resume registry entry: resume rebound this
+                    // connection to a different session id, so the earlier
+                    // registration above is now orphaned and would otherwise
+                    // never be cleaned up (on_session_end only unregisters the
+                    // FINAL id).
+                    if pre_registration_session_id != client_session_id {
+                        crate::herdr::unregister_session(&pre_registration_session_id);
+                    }
+                }
             }
 
             Request::GetHistory { id } => {

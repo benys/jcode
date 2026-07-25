@@ -885,8 +885,18 @@ impl Agent {
     }
 
     /// Fire a session lifecycle observer hook (`session_start`/`session_end`).
-    /// No-op when the hook is not configured.
+    /// No-op when the hook is not configured. Also reports to Herdr when
+    /// running inside a Herdr pane (independent of hook configuration).
     pub(crate) fn fire_session_lifecycle_hook(&self, event_name: &'static str, source: &str) {
+        // Herdr reporting is independent of user hooks: when running inside a
+        // Herdr pane we always report session lifecycle so the sidebar state
+        // is authoritative. See `crates/jcode-base/src/herdr.rs`.
+        if event_name == "session_start" {
+            crate::herdr::on_session_start(&self.session.id, source);
+        } else if event_name == "session_end" {
+            crate::herdr::on_session_end(&self.session.id);
+        }
+
         if !crate::hooks::hook_configured(event_name) {
             return;
         }

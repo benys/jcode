@@ -145,3 +145,14 @@ post_tool     = "~/bin/jcode-event-log"
   building any payload, so unconfigured hooks cost ~nothing.
 - The recursion guard (`JCODE_HOOKS_DISABLED=1`) means a hook may safely call
   `jcode` CLI commands without re-triggering hooks in that nested process.
+
+## See also: Herdr integration
+
+When jcode runs inside a [Herdr](https://herdr.dev) pane, it reports
+`idle`/`working`/`blocked`/`done` lifecycle state directly to the local Herdr
+socket so the agent appears in the Herdr sidebar with authoritative state (no
+screen-scraping). `blocked` fires whenever an ambient/overnight permission
+request is queued, and clears when the request is resolved. This is separate
+from the user-configurable hooks above and is always on when `HERDR_ENV=1`
+and `HERDR_SOCKET_PATH` are set. See [HERDR_INTEGRATION.md](HERDR_INTEGRATION.md)
+for the full design.

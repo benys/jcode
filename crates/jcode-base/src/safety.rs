@@ -22,9 +22,19 @@ pub fn register_permission_notifier(notifier: PermissionNotifier) {
     let _ = PERMISSION_NOTIFIER.set(notifier);
 }
 
-fn dispatch_permission_notification(action: &str, description: &str, request_id: &str) {
+fn dispatch_permission_notification(
+    session_id: Option<&str>,
+    action: &str,
+    description: &str,
+    request_id: &str,
+) {
     if let Some(notifier) = PERMISSION_NOTIFIER.get() {
         notifier(action, description, request_id);
+    }
+    // Report `blocked` to Herdr for this specific session's pane (if the
+    // session has a registered Herdr identity). No-op otherwise.
+    if let Some(sid) = session_id {
+        crate::herdr::report_state_for_session(sid, crate::herdr::State::Blocked, Some(action));
     }
 }
 
@@ -62,6 +72,11 @@ pub struct PermissionRequest {
     pub created_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<serde_json::Value>,
+    /// Session id that submitted the request, used to route Herdr `blocked`
+    /// lifecycle reports to the correct pane. Optional because not every
+    /// caller has a session context (e.g. legacy / programmatic callers).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -188,13 +203,14 @@ impl SafetySystem {
         let request_id = request.id.clone();
         let action = request.action.clone();
         let description = request.description.clone();
+        let session_id = request.session_id.clone();
         if let Ok(mut q) = self.queue.lock() {
             q.push(request);
             let _ = persist_queue(&q);
         }
         // Send high-priority notification for permission request via the
         // registered dispatcher (inverts the safety -> notifications edge).
-        dispatch_permission_notification(&action, &description, &request_id);
+        dispatch_permission_notification(session_id.as_deref(), &action, &description, &request_id);
         PermissionResult::Queued { request_id }
     }
 
@@ -266,6 +282,35 @@ impl SafetySystem {
             let _ = persist_history(&h);
         }
 
+        Ok(())
+    }
+
+    /// Like [`record_decision`](Self::record_decision) but also clears the
+    /// Herdr `blocked` state for `session_id` when no pending requests remain
+    /// for that session. Prefer this when the caller knows the session id.
+    pub fn record_decision_for_session(
+        &self,
+        request_id: &str,
+        approved: bool,
+        via: &str,
+        message: Option<String>,
+        session_id: Option<&str>,
+    ) -> Result<()> {
+        self.record_decision(request_id, approved, via, message)?;
+
+        if let Some(sid) = session_id {
+            let still_blocked = self
+                .pending_requests()
+                .iter()
+                .any(|r| r.session_id.as_deref() == Some(sid));
+            if !still_blocked {
+                crate::herdr::report_state_for_session(
+                    sid,
+                    crate::herdr::State::Idle,
+                    Some("permissions resolved"),
+                );
+            }
+        }
         Ok(())
     }
 
@@ -605,6 +650,7 @@ mod tests {
                 wait: false,
                 created_at: Utc::now(),
                 context: None,
+                session_id: None,
             };
 
             let result = sys.request_permission(req);
@@ -633,6 +679,7 @@ mod tests {
                 wait: false,
                 created_at: Utc::now(),
                 context: None,
+                session_id: None,
             };
 
             sys.request_permission(req);
@@ -702,6 +749,7 @@ mod tests {
                 wait: false,
                 created_at: Utc::now(),
                 context: None,
+                session_id: None,
             };
             sys.request_permission(req);
             assert_eq!(sys.pending_requests().len(), baseline + 1);

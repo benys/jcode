@@ -677,6 +677,7 @@ impl Tool for RequestPermissionTool {
             wait: params.wait,
             created_at: now,
             context: Some(request_context),
+            session_id: Some(ctx.session_id.clone()),
         };
 
         let system = get_safety_system();
